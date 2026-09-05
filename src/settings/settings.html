@@ -346,7 +346,17 @@
                     <button id="btnSessRefresh" class="ghost">refresh status</button>
                     <button id="btnSessClear" class="ghost">log out</button>
                 </div>
-                <div class="hint" style="margin:14px 0 6px;">if logging in on the site doesn't stick, paste your login cookie here:</div>
+                <div class="hint" style="margin:14px 0 6px;">log in with your bandcamp email + password (it is only sent to bandcamp, never stored):</div>
+                <input type="text" id="sessEmail" placeholder="email or username" autocomplete="off" spellcheck="false">
+                <input type="password" id="sessPass" placeholder="password" autocomplete="off" style="margin-top:8px;">
+                <div id="sess2faWrap" style="display:none;margin-top:8px;">
+                    <div class="hint" style="margin:0 0 6px;">two-factor code from your authenticator app:</div>
+                    <input type="text" id="sess2fa" placeholder="6-digit code" autocomplete="off" spellcheck="false">
+                </div>
+                <div class="row" style="gap:8px;margin-top:10px;">
+                    <button id="btnSessLogin" class="ghost">log in</button>
+                </div>
+                <div class="hint" style="margin:14px 0 6px;">if the web login doesn't stick, paste your login cookie here:</div>
                 <div class="hint">in chrome: F12 → application → cookies → bandcamp.com → copy the <b>identity</b> value. it stays saved in this app.</div>
                 <input type="text" id="sessCookie" placeholder="paste the identity cookie value" autocomplete="off" spellcheck="false">
                 <div class="row" style="gap:8px;margin-top:10px;">
@@ -926,6 +936,35 @@ for (const id of Object.keys(RANGE_DEFAULTS)) {
                 await ipcRenderer.invoke('session:clear').catch(() => null);
                 $('sessMsg').textContent = 'logged out.';
                 refreshSess();
+            };
+            // email + password login. the password is posted straight to
+            // bandcamp and never stored; 2fa asks for the code on a 2nd pass.
+            let sessEmail = '';
+            let sessPass = '';
+            $('btnSessLogin').onclick = async () => {
+                sessEmail = $('sessEmail').value.trim();
+                sessPass = $('sessPass').value;
+                const code = $('sess2faWrap').style.display === 'none' ? '' : $('sess2fa').value.trim();
+                if (!sessEmail || !sessPass) { $('sessMsg').textContent = 'enter email and password.'; return; }
+                $('sessMsg').textContent = 'logging in…';
+                const res = await ipcRenderer.invoke('session:login', { user: sessEmail, pass: sessPass, twoFactor: code }).catch(() => null);
+                $('sessPass').value = '';
+                sessPass = '';
+                if (!res) { $('sessMsg').textContent = 'login failed - is the app still running?'; return; }
+                if (res.ok) {
+                    $('sess2faWrap').style.display = 'none';
+                    $('sess2fa').value = '';
+                    sessEmail = '';
+                    $('sessMsg').textContent = 'logged in' + (res.fanId ? ' (fan ' + res.fanId + ')' : '') + '.';
+                    refreshSess();
+                    return;
+                }
+                if (res.needTwoFactor) {
+                    $('sess2faWrap').style.display = '';
+                    $('sessMsg').textContent = 'enter the 6-digit code, then log in again.';
+                    return;
+                }
+                $('sessMsg').textContent = res.error || 'login failed.';
             };
             ipcRenderer.on('updates:status', (_e, st) => renderUpd(st || {}));
             $('btnCheckUpdates').onclick = async () => {

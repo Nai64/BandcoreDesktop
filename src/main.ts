@@ -3886,6 +3886,20 @@ const entry: DlEntry = { id: entryId, name: `${rel.albumArtist} - ${rel.album}`,
         try { store.set('identityCookie', ''); } catch { /* ignore */ }
         return { ok: true };
     });
+    // email + password login. the password is never stored - only the
+    // resulting session cookie is persisted for boot restore.
+    ipcMain.handle('session:login', async (_e, req: unknown) => {
+        const { user, pass, twoFactor } = ((req || {}) as any) || {};
+        const res = await bandcampApi.loginWithPassword(String(user || ''), String(pass || ''), String(twoFactor || ''));
+        if (!res.ok) return res;
+        try {
+            const v = await bandcampApi.identityCookieValue();
+            if (v) store.set('identityCookie', v);
+        } catch { /* session still works for this run */ }
+        if (homeVisible && homeView && !homeView.webContents.isDestroyed()) homeView.webContents.send('home:load');
+        if (devMode) console.log('[bcrpc] session:login ok fanId=' + (res.fanId || '?'));
+        return res;
+    });
     ipcMain.handle('settings:get', () => {
         if (devMode) console.log('[bcrpc] settings:get');
         return {

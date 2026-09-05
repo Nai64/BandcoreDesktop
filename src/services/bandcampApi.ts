@@ -710,9 +710,83 @@ export class BandcampApi {
         } catch { /* snapshot stays stale; updates endpoint still works */ }
     }
 
-        /** bandcamp's authoritative owned-item count (collection_summary lookup size). 0 if unknown. */
-    async fetchOwnedTotal(): Promise<number> {
+        // --- email + password login ------------------------------------------------
+    // mirrors the site's own login form: GET /login for session cookies +
+    // the csrf meta, then POST /login_cb with the same fields its knockout
+    // model sends ("user.name", "login.password", optional "login.twofactor").
+    // the password is never stored - only the resulting session cookies live on.
+    async loginWithPassword(
+        user: string,
+        pass: string,
+        twoFactor = ''
+    ): Promise<{ ok: boolean; fanId?: string; needTwoFactor?: boolean; error?: string }> {
+        const session = this.getSession();
+        if (!session) return { ok: false, error: 'no session' };
+        const u = (user || '').trim();
+        const p = pass || '';
+        if (!u || !p) return { ok: false, error: 'enter email and password' };
+        let csrf = '';
+        try {
+            const r = await session.fetch('https://bandcamp.com/login', { credentials: 'include' } as any);
+            const html = await r.text();
+            const m = html.match(/<meta[^>]+name=["']csrf-token["'][^>]+content=["']([^"']+)/i)
+                || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']csrf-token["']/i);
+            if (m) csrf = m[1];
+        } catch { return { ok: false, error: 'could not reach the login page' }; }
+        const body = new URLSearchParams();
+        body.set('user.name', u);
+        body.set('login.password', p);
+        body.set('login.twofactor', twoFactor);
+        body.set('login.twofactor_remember', twoFactor ? 'true' : '');
+        let data: any = null;
+        try {
+            const r = await session.fetch('https://bandcamp.com/login_cb', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    // bandcamp's _cb endpoints only answer real xhr calls
+                    'X-Requested-With': 'XMLHttpRequest',
+                    ...(csrf ? { 'X-CSRF-TOKEN': csrf } : {}),
+                },
+                body: body.toString(),
+                credentials: 'include',
+            } as any);
+            const text = await r.text();
+            try { data = JSON.parse(text); }
+            catch { return { ok: false, error: 'bandcamp rejected the login request' }; }
+        } catch { return { ok: false, error: 'login request failed' }; }
+        if (data?.ok) {
+            this.cachedFanId = '';
+            this.cachedFanUsername = '';
+            const fanId = toId(data.fan_id) || await this.fanIdFromCookie();
+            return { ok: true, fanId };
+        }
+        const errs: any[] = Array.isArray(data?.errors) ? data.errors : [];
+        const has = (f: string, r?: string) => errs.some((e: any) => e?.field === f && (!r || e?.reason === r));
+        if (has('login.twofactor')) return { ok: false, needTwoFactor: true };
+        if (has('login.captcha')) return { ok: false, error: 'bandcamp wants a human check - log in once on the site inside the app, then you are set' };
+        if (has('login.user', 'matchedManyUsers')) return { ok: false, error: 'several accounts share this login - pick one by logging in on the site' };
+        if (has('login.user') || has('user.name')) return { ok: false, error: 'unknown username or email' };
+        if (has('login.password')) return { ok: false, error: 'incorrect password' };
+        // bot wall: a bare `error: true` (or a captcha flag) instead of the
+        // field errors - the session/IP must solve a human check on the site
+        if (data && (data.show_captcha || data.captcha_required || data.requires_captcha || data.error === true)) {
+            return { ok: false, error: 'bandcamp wants a human check - log in once on the site inside the app, then you are set' };
+        }
+        const errMsg = typeof data?.error === 'string' && data.error ? data.error : '';
+        return { ok: false, error: errMsg || 'login failed' };
+    }
 
+    /** read the raw identity cookie value (for persisting a fresh login). */
+    async identityCookieValue(): Promise<string> {
+        try {
+            const cs = await this.getSession()?.cookies.get({ url: 'https://bandcamp.com', name: 'identity' });
+            return cs?.[0]?.value || '';
+        } catch { return ''; }
+    }
+
+    /** bandcamp's authoritative owned-item count (collection_summary lookup size). 0 if unknown. */
+    async fetchOwnedTotal(): Promise<number> {
         const session = this.getSession();
         if (!session) return 0;
         try {
