@@ -907,6 +907,19 @@ async function init() {
     lastfmService = new LastfmService(store);
     bandcampApi = new BandcampApi(() => (contentView ? contentView.webContents.session : null));
 
+    // re-apply a pasted session cookie saved earlier (fresh profiles would
+    // otherwise lose the login the webview never completed)
+    try {
+        const saved = String(store.get('identityCookie', '') || '');
+        if (saved) {
+            const has = await bandcampApi.sessionCookies().then((cs) => cs.some((c) => c.name === 'identity')).catch(() => true);
+            if (!has) {
+                await bandcampApi.setIdentityCookie(saved);
+                if (devMode) console.log('[bcrpc] session restored from saved cookie');
+            }
+        }
+    } catch { /* session stays as-is */ }
+
     // surface bandcamp's HTTP 429 throttling to the user (previously only visible
     // in the devtools console). our own styled window, not a native dialog; shown
     // at most once per session; "Don't show again" persists the opt-out.
@@ -3862,6 +3875,8 @@ const entry: DlEntry = { id: entryId, name: `${rel.albumArtist} - ${rel.album}`,
     ipcMain.handle('session:set-identity', async (_e, value: unknown) => {
         const ok = await bandcampApi.setIdentityCookie(String(value || ''));
         if (!ok) return { ok: false, fanId: '' };
+        // persist so fresh profiles re-log automatically on restart
+        try { store.set('identityCookie', String(value || '').trim()); } catch { /* ignore */ }
         const st = await bandcampApi.sessionStatus().catch(() => null);
         if (devMode) console.log('[bcrpc] session:set-identity fanId=' + (st?.fanId || '?') + ' summaryOk=' + !!(st && st.summaryOk));
         return { ok: true, fanId: st?.fanId || '' };

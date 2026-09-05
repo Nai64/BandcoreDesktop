@@ -164,6 +164,7 @@
             <button class="nav-item" data-pane="windowbar" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M10 4v4"/><path d="M2 8h20"/><path d="M6 4v4"/></svg>Window Bar</button>
             <button class="nav-item" data-pane="keybinds" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><path d="M10 8h.01"/><path d="M12 12h.01"/><path d="M14 8h.01"/><path d="M16 12h.01"/><path d="M18 8h.01"/><path d="M6 8h.01"/><path d="M7 16h10"/><path d="M8 12h.01"/><rect width="20" height="16" x="2" y="4" rx="2"/></svg>Keybinds</button>
             <button class="nav-item" data-pane="storage" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><path d="M10 16h.01"/><path d="M2.212 11.577a2 2 0 0 0-.212.896V18a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-5.527a2 2 0 0 0-.212-.896L18.55 5.11A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><path d="M21.946 12.013H2.054"/><path d="M6 16h.01"/></svg>Storage</button>
+            <button class="nav-item" data-pane="session" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5"/></svg>Session</button>
             <button class="nav-item" data-pane="about" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>About</button>
         </nav>
         <div class="pane-wrap">
@@ -336,6 +337,22 @@
                     <option value="none">none</option>
                 </select>
                 <div class="hint" style="margin:6px 0 0;">written next to the tracks when downloading a release's mp3-128 streams (release-page button, right-click menu, or the ⤓ on wishlist items).</div>
+            </section>
+
+            <section class="pane hidden" id="pane-session">
+                <h2>Session</h2>
+                <div class="hint" id="sessStatus">checking…</div>
+                <div class="row" style="gap:8px;flex-wrap:wrap;">
+                    <button id="btnSessRefresh" class="ghost">refresh status</button>
+                    <button id="btnSessClear" class="ghost">log out</button>
+                </div>
+                <div class="hint" style="margin:14px 0 6px;">if logging in on the site doesn't stick, paste your login cookie here:</div>
+                <div class="hint">in chrome: F12 → application → cookies → bandcamp.com → copy the <b>identity</b> value. it stays saved in this app.</div>
+                <input type="text" id="sessCookie" placeholder="paste the identity cookie value" autocomplete="off" spellcheck="false">
+                <div class="row" style="gap:8px;margin-top:10px;">
+                    <button id="btnSessSave" class="ghost">save session</button>
+                </div>
+                <div class="hint" id="sessMsg" style="margin:6px 0 0;"></div>
             </section>
 
             <section class="pane hidden" id="pane-about">
@@ -874,6 +891,42 @@ for (const id of Object.keys(RANGE_DEFAULTS)) {
             $('btnOpenBaseRepo').onclick = () => openExt('https://github.com/elricfd/bc-desktop');
             $('btnOpenLucide').onclick = () => openExt('https://lucide.dev/');
             $('btnMaintainer').onclick = () => openExt('https://x.com/nai_sucks');
+            // session pane: what the app sees + the paste-cookie login workaround
+            const renderSess = (st) => {
+                if (!st) { $('sessStatus').textContent = 'could not read the session.'; return; }
+                const parts = [];
+                parts.push(st.hasIdentity ? 'bandcamp login cookie: present' : 'bandcamp login cookie: MISSING');
+                if (st.fanId) parts.push('fan id: ' + st.fanId);
+                parts.push('account api: ' + (st.summaryOk ? 'reachable' : 'UNREACHABLE'));
+                const names = (st.cookies || []).map((c) => c.name + (c.session ? ' (session-only)' : ''));
+                $('sessStatus').textContent = names.length
+                    ? parts.join(' · ') + ' — cookies: ' + names.join(', ')
+                    : parts.join(' · ');
+            };
+            const refreshSess = () => {
+                $('sessStatus').textContent = 'checking…';
+                ipcRenderer.invoke('session:check').then(renderSess).catch(() => { $('sessStatus').textContent = 'could not read the session.'; });
+            };
+            refreshSess();
+            $('btnSessRefresh').onclick = refreshSess;
+            $('btnSessSave').onclick = async () => {
+                const v = $('sessCookie').value.trim();
+                if (!v) { $('sessMsg').textContent = 'paste the identity cookie value first.'; return; }
+                $('sessMsg').textContent = 'saving…';
+                const res = await ipcRenderer.invoke('session:set-identity', v).catch(() => null);
+                if (res && res.ok) {
+                    $('sessMsg').textContent = 'session saved' + (res.fanId ? ' (fan ' + res.fanId + ')' : '') + ' - reopen home to reload.';
+                    $('sessCookie').value = '';
+                    refreshSess();
+                } else {
+                    $('sessMsg').textContent = 'could not save - is the app still running?';
+                }
+            };
+            $('btnSessClear').onclick = async () => {
+                await ipcRenderer.invoke('session:clear').catch(() => null);
+                $('sessMsg').textContent = 'logged out.';
+                refreshSess();
+            };
             ipcRenderer.on('updates:status', (_e, st) => renderUpd(st || {}));
             $('btnCheckUpdates').onclick = async () => {
                 $('updStatus').textContent = 'checking for updates…';
