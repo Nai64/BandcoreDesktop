@@ -632,9 +632,27 @@ export class BandcampApi {
 
     private cachedFanId = '';
 
+    /**
+     * decode the fan id straight out of the identity cookie (no network).
+     * the cookie is url-encoded `...\t{"id":12345,"h1":"...","ex":0}` - this
+     * keeps fan resolution working even when the summary endpoint hiccups.
+     */
+    async fanIdFromCookie(): Promise<string> {
+        try {
+            const cs = await this.getSession()?.cookies.get({ url: 'https://bandcamp.com', name: 'identity' });
+            const v = cs?.[0]?.value || '';
+            const m = decodeURIComponent(v).match(/"id"\s*:\s*(\d+)/);
+            if (m?.[1]) return m[1];
+        } catch { /* fall through */ }
+        return '';
+    }
+
     /** resolve (and cache) the logged-in fan's id from the collection summary. */
     private async getFanId(): Promise<string> {
         if (this.cachedFanId) return this.cachedFanId;
+        // cookie first: instant, and immune to summary-endpoint failures
+        const fromCookie = await this.fanIdFromCookie();
+        if (fromCookie) { this.cachedFanId = fromCookie; return fromCookie; }
         const session = this.getSession();
         if (!session) return '';
         try {
@@ -692,8 +710,9 @@ export class BandcampApi {
         } catch { /* snapshot stays stale; updates endpoint still works */ }
     }
 
-    /** bandcamp's authoritative owned-item count (collection_summary lookup size). 0 if unknown. */
+        /** bandcamp's authoritative owned-item count (collection_summary lookup size). 0 if unknown. */
     async fetchOwnedTotal(): Promise<number> {
+
         const session = this.getSession();
         if (!session) return 0;
         try {
@@ -703,6 +722,81 @@ export class BandcampApi {
             const lookup = d?.collection_summary?.tralbum_lookup;
             return lookup && typeof lookup === 'object' ? Object.keys(lookup).length : 0;
         } catch { return 0; }
+    }
+
+    // --- session diagnostics + manual session (paste-cookie login) -------------
+
+    /** bandcamp cookies in the session store. names + flags only, never values. */
+    async sessionCookies(): Promise<{ name: string; domain: string; secure: boolean; httpOnly: boolean; session: boolean; sameSite: string; expiry: number }[]> {
+        const session = this.getSession();
+        if (!session) return [];
+        try {
+            const all = await session.cookies.get({});
+            return all
+                .filter((c) => (c.domain || '').includes('bandcamp'))
+                .map((c) => ({
+                    name: c.name,
+                    domain: c.domain || '',
+                    secure: !!c.secure,
+                    httpOnly: !!c.httpOnly,
+                    session: !!c.session,
+                    sameSite: String(c.sameSite || ''),
+                    expiry: c.expirationDate || 0,
+                }));
+        } catch { return []; }
+    }
+
+    /** full session picture for diagnostics: cookie inventory + fan resolution. */
+    async sessionStatus(): Promise<{ fanId: string; fromCookie: boolean; summaryOk: boolean; hasIdentity: boolean; cookies: { name: string; domain: string; secure: boolean; httpOnly: boolean; session: boolean; sameSite: string; expiry: number }[] }> {
+        const cookies = await this.sessionCookies();
+        const hasIdentity = cookies.some((c) => c.name === 'identity');
+        let fanId = '';
+        let fromCookie = false;
+        if (hasIdentity) {
+            fanId = await this.fanIdFromCookie();
+            fromCookie = !!fanId;
+        }
+        if (!fanId) fanId = await this.getFanId();
+        let summaryOk = false;
+        if (fanId) {
+            try {
+                const r = await this.getSession()!.fetch('https://bandcamp.com/api/fan/2/collection_summary', { credentials: 'include' } as any);
+                summaryOk = r.ok;
+            } catch { /* stays false */ }
+        }
+        return { fanId, fromCookie, summaryOk, hasIdentity, cookies };
+    }
+
+    /**
+     * install an identity cookie by hand (the paste-cookie login flow).
+     * returns true when the cookie landed in the store.
+     */
+    async setIdentityCookie(value: string): Promise<boolean> {
+        const session = this.getSession();
+        const v = (value || '').trim();
+        if (!session || !v) return false;
+        try {
+            await session.cookies.set({
+                url: 'https://bandcamp.com',
+                name: 'identity',
+                value: v,
+                domain: '.bandcamp.com',
+                path: '/',
+                secure: true,
+                httpOnly: true,
+                expirationDate: Math.floor(Date.now() / 1000) + 86400 * 90,
+            });
+            this.cachedFanId = '';
+            this.cachedFanUsername = '';
+            return true;
+        } catch { return false; }
+    }
+
+    /** drop the identity cookie + forget the cached fan. */
+    async clearSession(): Promise<void> {
+        try { await this.getSession()?.cookies.remove('https://bandcamp.com', 'identity'); } catch { /* ignore */ }
+        this.cachedFanId = '';
+        this.cachedFanUsername = '';
     }
 
     /** normalize one feed story entry (fields vary between story types & api versions). */

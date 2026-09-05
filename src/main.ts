@@ -3855,6 +3855,22 @@ const entry: DlEntry = { id: entryId, name: `${rel.albumArtist} - ${rel.album}`,
     ipcMain.handle('open:external', (_e, url: unknown) => {
         if (typeof url === 'string' && /^https:\/\//i.test(url)) shell.openExternal(url);
     });
+    // session diagnostics + the paste-cookie login workaround: see exactly
+    // what the app sees (cookie names only, never values)
+    ipcMain.handle('session:check', () =>
+        bandcampApi.sessionStatus().catch(() => ({ fanId: '', fromCookie: false, summaryOk: false, hasIdentity: false, cookies: [] })));
+    ipcMain.handle('session:set-identity', async (_e, value: unknown) => {
+        const ok = await bandcampApi.setIdentityCookie(String(value || ''));
+        if (!ok) return { ok: false, fanId: '' };
+        const st = await bandcampApi.sessionStatus().catch(() => null);
+        if (devMode) console.log('[bcrpc] session:set-identity fanId=' + (st?.fanId || '?') + ' summaryOk=' + !!(st && st.summaryOk));
+        return { ok: true, fanId: st?.fanId || '' };
+    });
+    ipcMain.handle('session:clear', async () => {
+        await bandcampApi.clearSession();
+        try { store.set('identityCookie', ''); } catch { /* ignore */ }
+        return { ok: true };
+    });
     ipcMain.handle('settings:get', () => {
         if (devMode) console.log('[bcrpc] settings:get');
         return {

@@ -90,6 +90,7 @@
         "darkreader": "^4.9.128",
         "electron-store": "^8.2.0",
         "electron-updater": "^6.8.9",
+        "opencode-ai": "^1.18.29",
         "present": "^1.0.0",
         "scripts": "^0.1.0"
     },
